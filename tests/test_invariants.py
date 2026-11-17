@@ -54,3 +54,33 @@ def test_interval_usage_never_negative(store, batch_id):
         assert interval["usage_kwh"] > 0
         assert interval["delta"] > 0
         assert interval["end_at"] > interval["start_at"]
+
+
+def test_pv_settlement_net_matches_included_lines(settings, store):
+    """结算守恒：月净额 = 计入行（购电正、上网负）金额之和，跨月加总也对得上。"""
+    from app.modules.m6_batches import service as batch_service
+    result = batch_service.run(settings, store, sample="readings_pv.csv")
+    batch_id = result["batch"]["batch_id"]
+    months = store.load_settlement_months(batch_id)
+    lines = store.load_settlement_lines(batch_id)
+    for month in months:
+        net = sum((line["amount_yuan"] if line["direction"] == "PURCHASE"
+                   else -line["amount_yuan"])
+                  for line in lines
+                  if line["month"] == month["month"] and line["included"])
+        assert net == month["net_amount"]
+    assert sum((item["net_amount"] for item in months), Decimal("0.00")) == \
+        Decimal(result["totals"]["settlement_net_amount"])
+
+
+def test_single_direction_batches_are_untouched(settings, store):
+    """单向批次口径不变：不产生结算行，区间账与月度账仍逐位相等。"""
+    from app.modules.m6_batches import service as batch_service
+    result = batch_service.run(settings, store, sample="readings_dirty.csv")
+    batch_id = result["batch"]["batch_id"]
+    assert store.load_settlement_months(batch_id) == []
+    assert store.load_settlement_lines(batch_id) == []
+    stages = {item["stage"]: item for item in result["stages"]}
+    assert stages["settlement"]["status"] == "skipped"
+    assert Decimal(result["totals"]["interval_usage"]) == Decimal(
+        result["totals"]["month_usage"]) == expected.TOTAL_USAGE

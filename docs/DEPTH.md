@@ -1,8 +1,8 @@
 # 深度登记 meterback（累计电表读数还原与月度切分）
 
-- 规模：中型（7 个功能模块 / 6 个应用页 / 77 条测试）
-- 核心规则：**区间还原 + 按日权重月度切分**。读数按 `(表号, 寄存器, UTC 时间)` 排序后逐对还原：区间用量 =（本次 − 上次）× 综合倍率，满量容量翻转时补容量，换表处拆成「旧表末段 + 新表首读起算」两段，估抄行不作锚点但给区间打标记；区间用量按覆盖天数切到自然月（`[月初, 下月初)` 半开），余数用最大余额法分到 0.001 kWh，同月「总表 = 峰 + 平 + 谷」的残差并入最大分量。
-- 使用者与工作流：临江供电所抄表班 4 人、辖区 8 只示例表（实际 320 只），月度线损与电费原先靠 Excel 手拉；现在一次处理得到「区间用量 + 月度分摊 + 电费」，每个数字都能追回原始行号与原因码。
+- 规模：中型（8 个功能模块 / 8 个应用页 / 105 条测试）
+- 核心规则：**区间还原 + 按日权重月度切分 + 双向净结算**。读数按 `(表号, 寄存器, UTC 时间)` 排序后逐对还原：区间用量 =（本次 − 上次）× 综合倍率，满量容量翻转时补容量，换表处拆成「旧表末段 + 新表首读起算」两段，估抄行不作锚点但给区间打标记；区间用量按覆盖天数切到自然月（`[月初, 下月初)` 半开），余数用最大余额法分到 0.001 kWh，同月「总表 = 峰 + 平 + 谷」的残差并入最大分量。光伏户的购电、上网各一条累计序列，两向分别计价后再轧差；月底只有一向先到时按「单方向暂结 + 另一向暂挂」发布，补抄到达后追加新版本，旧版保留复核。
+- 使用者与工作流：临江供电所抄表班 4 人、辖区 8 只单向示例表 + 2 只光伏双向表（实际 320 只），月度线损与电费原先靠 Excel 手拉；现在一次处理得到「区间用量 + 月度分摊 + 电费 + 光伏净结算」，每个数字都能追回原始行号与原因码。
 
 ## 功能模块
 
@@ -14,7 +14,8 @@
 | M4 区间还原 | 重算区间，看翻转、换表、估抄标记 | POST /api/intervals/rebuild、页面 /intervals | `app/modules/m4_intervals/restore.py` `app/modules/m4_intervals/rollover.py` `app/modules/m4_intervals/swaps.py` | `tests/test_m4_intervals.py` |
 | M5 月度切分 | 重算分摊与账单，看每月合计与尾差 | POST /api/months/allocate、页面 /months | `app/modules/m5_months/allocate.py` `app/modules/m5_months/weights.py` `app/modules/m5_months/tou.py` | `tests/test_m5_months.py` |
 | M6 批次与对账 | 跑全流程、查批次历史、看四账、失败重试 | POST /api/runs、GET /api/batches、GET /api/reconcile、页面 / 与 /batches | `app/modules/m6_batches/service.py` `app/modules/m6_batches/compare.py` `app/modules/m6_batches/history.py` `app/modules/m6_batches/resume.py` | `tests/test_m6_batches.py` |
-| M7 导出 | 导出月度分摊、区间、隔离、读数证据、运行清单 | GET /api/export/monthly.csv、GET /api/export/manifest.json、页面 /export | `app/modules/m7_export/evidence.py` `app/modules/m7_export/csv_out.py` `app/modules/m7_export/manifest_out.py` | `tests/test_m7_export.py` |
+| M7 导出 | 导出月度分摊、区间、隔离、读数证据、双向净结算、运行清单 | GET /api/export/monthly.csv、GET /api/export/manifest.json、页面 /export | `app/modules/m7_export/evidence.py` `app/modules/m7_export/csv_out.py` `app/modules/m7_export/manifest_out.py` | `tests/test_m7_export.py` |
+| M8 双向净结算 | 看购电/上网分向用量、缺向暂挂、补抄发布与版本复核、两向原始读数台账 | POST /api/settlement/compute、POST /api/settlement/publish、GET /api/settlement、页面 /settlement 与 /ledger | `app/modules/m8_settlement/ledger.py` `app/modules/m8_settlement/compute.py` `app/modules/m8_settlement/publish.py` | `tests/test_m8_settlement.py` |
 
 端到端：`tests/test_e2e.py`（脏样例 → 六页 200 → 四账 → 导出，含 4xx 失败输入与幂等重跑）。
 不变量：`tests/test_invariants.py`（区间账 = 月度账、幂等重跑行数不变、月桶划分、账单闭合、读数分区）。
@@ -38,6 +39,11 @@
 | TRAP-18 | 0 字节文件、只有表头、数据行全是空行 | 三种都返回「成功导入 0 行」，或直接除零 | 三个文件级原因码分开返回，不落半批数据 | `app/modules/m1_ingest/service.py` | `tests/test_m1_ingest.py::test_empty_states_return_distinct_codes` |
 | TRAP-23 | 区间止点与下一段起点都算一次 | 相邻区间重复计入一天，月度用量偏高 | 区间与月桶都声明左闭右开 `[起, 止)`，相邻段首尾相接 | `app/modules/m5_months/weights.py`、`app/modules/m4_intervals/restore.py` | `tests/test_m5_months.py::test_month_slices_are_half_open`、`tests/test_m4_intervals.py::test_intervals_are_half_open_and_contiguous` |
 | TRAP-24 | 各月/各分量各自四舍五入后合计不等 | 分完差 0.001~0.02，账永远差几分 | 最大余额法分月；分量残差并入最大分量；账单先合计再舍入，分项补差 | `app/modules/m5_months/weights.py`、`app/modules/m5_months/tou.py` | `tests/test_m5_months.py::test_largest_remainder_keeps_total_exact`、`tests/test_m5_months.py::test_tou_components_closed_to_total` |
+| TRAP-25 | 光伏户月底只有购电或只有上网先到 | 拿「购电 − 上网」的净电量套购电价，缺的那一向被当成 0，上网收益凭空消失或购电被算成倒送 | 两向分别计价后轧差；缺向侧 `suspended` 暂挂不并入净额，月状态 `partial`，明确标注缺哪一向 | `app/modules/m8_settlement/compute.py` | `tests/test_m8_settlement.py::test_settled_month_uses_two_prices_not_net_quantity`、`tests/test_m8_settlement.py::test_missing_direction_month_is_partial_with_suspended_side` |
+| TRAP-26 | 等两向读数齐了才结账 | 月结拖过财务关账日，或先结一版后无处标记「哪一向还欠着」 | 缺向即可发布：已到方向按本向电价结，缺向暂挂留痕，补抄后追加新版本 | `app/modules/m8_settlement/publish.py`、`app/modules/m8_settlement/handler.py` | `tests/test_m8_settlement.py::test_supplement_publishes_new_version_and_keeps_old` |
+| TRAP-27 | 补抄包重复导入 / 基础包重跑 | 同一读数被算两次，电量翻倍 | 两向台账按 `(表号, 寄存器, UTC 时间)` 合并，同键同值只留最早一条，重跑台账逐位相同 | `app/modules/m8_settlement/ledger.py`、`app/modules/m8_settlement/service.py` | `tests/test_m8_settlement.py::test_replaying_same_supplement_adds_no_rows_or_versions` |
+| TRAP-28 | 发布写到一半断掉 | 新版本写了一半、旧版被标成替代，结果既不能复核也说不清 | 结算行、台账、版本同一事务写入；失败整体回滚，旧版仍 `published` 且整份 JSON 可复核 | `app/store.py`、`app/modules/m8_settlement/publish.py` | `tests/test_m8_settlement.py::test_failed_publish_rolls_back_and_keeps_old_version` |
+| TRAP-29 | 隔离区只有原因码没有方向 | 被隔离的上网读数与购电读数混在一张表里，追不回是哪一向 | 台账给隔离行补回方向（从原始单元格还原寄存器），原值、行号、来源包全部保留 | `app/modules/m8_settlement/ledger.py` | `tests/test_m8_settlement.py::test_ledger_quarantined_rows_retain_direction_and_raw` |
 
 ## 对账规则
 
@@ -45,17 +51,22 @@
 - 区间账：主寄存器（总表优先）区间用量合计 = 月度分摊用量合计（0.001 kWh，逐位相等）。
 - 月度账：同月同表「总表 = 峰 + 平 + 谷」，闭合后的残差必须为 0，闭合前的尾差条数单独计数。
 - 账单账：账单金额 = 分项金额之和（分项先截尾再补分），四账在 `/` 与 `/batches` 页、`/api/reconcile`、运行清单里同源显示。
+- 结算账：两向台账「输入行 = 采用 + 重复 + 冲突 + 隔离」；净额只统计 `included=1` 的结算行；月度净额 = 该月各户「购电金额 − 上网金额」之和，在 `/settlement`、`/months` 与运行清单 `settlement` 段同源显示。
 
 ## 反例与不变量
 
-- 反例（朴素实现会挂）：`tests/test_m4_intervals.py::test_naive_subtraction_would_drop_rollover`（直接相减得负数，翻转段被丢）、`tests/test_m5_months.py::test_bill_rounding_closed_not_naive`（逐项四舍五入多 1 分）、`tests/test_m1_ingest.py::test_naive_splitlines_would_break_records`（带千分位的单元格被切成两列）。
+- 反例（朴素实现会挂）：`tests/test_m4_intervals.py::test_naive_subtraction_would_drop_rollover`（直接相减得负数，翻转段被丢）、`tests/test_m5_months.py::test_bill_rounding_closed_not_naive`（逐项四舍五入多 1 分）、`tests/test_m1_ingest.py::test_naive_splitlines_would_break_records`（带千分位的单元格被切成两列）、`tests/test_m8_settlement.py::test_settled_month_uses_two_prices_not_net_quantity`（净电量套购电价与分向计价差 40 元）。
 - 不变量：`tests/test_invariants.py::test_conservation_intervals_equal_months`（守恒）、`tests/test_invariants.py::test_idempotent_run_keeps_rows`（幂等）、`tests/test_invariants.py::test_month_slices_partition_every_interval`（划分）、`tests/test_invariants.py::test_bill_components_sum_equals_amount`（账单闭合）、`tests/test_invariants.py::test_readings_partition_holds`（分区）。
-- 端到端：`tests/test_e2e.py::test_full_pipeline_over_http`。
+- 结算不变量：`tests/test_m8_settlement.py::test_net_amount_sums_to_month_groups`（月净额 = 计入行之和）、`tests/test_m8_settlement.py::test_ledger_keeps_both_directions_and_partitions`（台账分区闭合）、`tests/test_m8_settlement.py::test_preview_does_not_touch_published_rows`（预览不改已发布行）。
+- 端到端：`tests/test_e2e.py::test_full_pipeline_over_http`、`tests/test_m8_settlement.py::test_http_publish_then_old_version_download`。
 
 ## 已知不覆盖
 
-- 只支持单表计的单向有功读数；双向表（正/反向分别累计）、需量寄存器、无功寄存器一律按 `Q_BAD_REGISTER` 隔离。
-- 电价固定读 `sample_data/prices.csv`（峰 1.05 / 平 0.65 / 谷 0.32 元每 kWh），没有分时日历、阶梯电价与容量电费。
+- 只支持单表计的单向有功读数与「购电 / 上网」两向有功读数；需量寄存器、无功寄存器一律按 `Q_BAD_REGISTER` 隔离。
+- 电价固定读 `sample_data/prices.csv`（峰 1.05 / 平 0.65 / 谷 0.32 / 购电 0.60 / 上网 0.40 元每 kWh），没有分时日历、阶梯电价与容量电费。
+- 双向结算只按自然月轧差，不支持跨月结转（本月暂挂的上网读数补到后只修正本月，不重算前月）；上网收益为负时直接出负净额，不做退费单拆分。
+- 补抄包按白名单样例追加，一次最多并入单份补抄包；不支持按行增量上传或按表号选择性补抄。
+- 发布版本只保留内容与差异，不保存「谁点的发布」；没有审批流与回滚按钮（回滚=下载旧版后人工重录）。
 - 换表链只支持一段（旧表 → 新表）；链式多次换表能识别但只在最后一段起算，中间段会缺口。
 - 时区按固定 +08:00 处理，不引入 DST；跨时区台区不支持。
 - 并行抄表同一时刻多条读数只按「取值是否一致」判定冲突，没有设备侧时钟偏移校正。

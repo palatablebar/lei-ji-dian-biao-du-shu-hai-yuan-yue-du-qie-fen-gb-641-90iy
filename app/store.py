@@ -74,6 +74,53 @@ CREATE TABLE IF NOT EXISTS totals (
 CREATE TABLE IF NOT EXISTS manifests (
     batch_id TEXT PRIMARY KEY, json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settlements (
+    batch_id TEXT NOT NULL, month TEXT NOT NULL, meter_id TEXT NOT NULL,
+    direction TEXT NOT NULL, usage_kwh TEXT NOT NULL, price TEXT NOT NULL,
+    amount_yuan TEXT NOT NULL, state TEXT NOT NULL, included INTEGER NOT NULL,
+    provisional INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT '',
+    month_status TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settlement_months (
+    batch_id TEXT NOT NULL, month TEXT NOT NULL, status TEXT NOT NULL,
+    net_amount TEXT NOT NULL, purchase_kwh TEXT NOT NULL, feedin_kwh TEXT NOT NULL,
+    held_count INTEGER NOT NULL, computed_at TEXT NOT NULL,
+    supplements_json TEXT NOT NULL DEFAULT '[]', rule_version TEXT NOT NULL,
+    content_hash TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (batch_id, month)
+);
+CREATE TABLE IF NOT EXISTS settlement_readings (
+    batch_id TEXT NOT NULL, source TEXT NOT NULL, sample TEXT NOT NULL,
+    lineno INTEGER NOT NULL, segment INTEGER NOT NULL, meter_id TEXT NOT NULL,
+    register TEXT NOT NULL, direction TEXT NOT NULL, read_at TEXT,
+    reading_text TEXT NOT NULL, reading_kwh TEXT, unit_raw TEXT NOT NULL DEFAULT '',
+    read_type TEXT NOT NULL DEFAULT 'N', status TEXT NOT NULL, code TEXT,
+    note TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS settlement_conflicts (
+    batch_id TEXT NOT NULL, meter_id TEXT NOT NULL, register TEXT NOT NULL,
+    direction TEXT NOT NULL, read_at TEXT, source TEXT NOT NULL, sample TEXT NOT NULL,
+    lineno INTEGER NOT NULL, reading_text TEXT NOT NULL, code TEXT NOT NULL,
+    detail TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settlement_inputs (
+    batch_id TEXT NOT NULL, sample TEXT NOT NULL, sha256 TEXT NOT NULL,
+    bytes INTEGER NOT NULL, rows INTEGER NOT NULL, encoding TEXT NOT NULL,
+    PRIMARY KEY (batch_id, sample)
+);
+CREATE TABLE IF NOT EXISTS settlement_checks (
+    batch_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (batch_id, key)
+);
+CREATE TABLE IF NOT EXISTS settlement_versions (
+    version_id TEXT PRIMARY KEY, stream_id TEXT NOT NULL, batch_id TEXT NOT NULL,
+    month TEXT NOT NULL, seq INTEGER NOT NULL, content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL, status TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL, net_amount TEXT NOT NULL DEFAULT '',
+    month_status TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_settlement_versions
+    ON settlement_versions(stream_id, month, seq);
 """
 
 
@@ -175,11 +222,205 @@ class Store:
             conn.execute("UPDATE batches SET updated_at=? WHERE batch_id=?",
                          (stamp, batch_id))
 
+    # ---------- 双向结算 ----------
+    def _write_settlement(self, conn, batch_id: str, settlement: dict) -> None:
+        for table in ("settlements", "settlement_months", "settlement_readings",
+                      "settlement_conflicts", "settlement_inputs",
+                      "settlement_checks"):
+            conn.execute(f"DELETE FROM {table} WHERE batch_id=?", (batch_id,))
+        for item in settlement.get("lines", []):
+            conn.execute(
+                """INSERT INTO settlements (batch_id,month,meter_id,direction,
+                    usage_kwh,price,amount_yuan,state,included,provisional,reason,
+                    month_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (batch_id, item["month"], item["meter_id"], item["direction"],
+                 str(item["usage_kwh"]), str(item["price"]), str(item["amount_yuan"]),
+                 item["state"], 1 if item["included"] else 0,
+                 1 if item["provisional"] else 0, item.get("reason", ""),
+                 item["month_status"]))
+        for item in settlement.get("months", []):
+            conn.execute(
+                """INSERT INTO settlement_months (batch_id,month,status,net_amount,
+                    purchase_kwh,feedin_kwh,held_count,computed_at,supplements_json,
+                    rule_version,content_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(batch_id,month) DO UPDATE SET
+                     status=excluded.status, net_amount=excluded.net_amount,
+                     purchase_kwh=excluded.purchase_kwh,
+                     feedin_kwh=excluded.feedin_kwh,
+                     held_count=excluded.held_count,
+                     computed_at=excluded.computed_at,
+                     supplements_json=excluded.supplements_json,
+                     rule_version=excluded.rule_version,
+                     content_hash=excluded.content_hash""",
+                (batch_id, item["month"], item["status"], str(item["net_amount"]),
+                 str(item["purchase_kwh"]), str(item["feedin_kwh"]),
+                 item["held_count"], item["computed_at"],
+                 json.dumps(item.get("supplements", []), ensure_ascii=False),
+                 item["rule_version"], item.get("content_hash", "")))
+        for item in settlement.get("readings", []):
+            conn.execute(
+                """INSERT INTO settlement_readings (batch_id,source,sample,lineno,
+                    segment,meter_id,register,direction,read_at,reading_text,
+                    reading_kwh,unit_raw,read_type,status,code,note,detail)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (batch_id, item["source"], item["sample"], item["lineno"],
+                 item["segment"], item["meter_id"], item["register"],
+                 item["direction"], item["read_at"], item["reading_text"],
+                 None if item["reading"] is None else str(item["reading"]),
+                 item["unit_raw"], item["read_type"], item["status"],
+                 item.get("code") or None, item.get("note", ""),
+                 item.get("detail", "")))
+        for item in settlement.get("conflicts", []):
+            conn.execute(
+                """INSERT INTO settlement_conflicts (batch_id,meter_id,register,
+                    direction,read_at,source,sample,lineno,reading_text,code,detail)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (batch_id, item["meter_id"], item["register"], item["direction"],
+                 item.get("read_at"), item["source"], item["sample"],
+                 item["lineno"], item["reading_text"], item["code"],
+                 item.get("detail", "")))
+        for item in settlement.get("inputs", []):
+            conn.execute(
+                """INSERT INTO settlement_inputs (batch_id,sample,sha256,bytes,rows,
+                    encoding) VALUES (?,?,?,?,?,?)
+                   ON CONFLICT(batch_id,sample) DO UPDATE SET
+                     sha256=excluded.sha256, bytes=excluded.bytes,
+                     rows=excluded.rows, encoding=excluded.encoding""",
+                (batch_id, item["sample"], item["sha256"], item["bytes"],
+                 item["data_rows"], item["encoding"]))
+        for key, value in (settlement.get("checks") or {}).items():
+            conn.execute(
+                "INSERT INTO settlement_checks (batch_id,key,value) VALUES (?,?,?)",
+                (batch_id, key, str(value)))
+
+    def load_settlement_months(self, batch_id: str) -> list[dict]:
+        rows = self._all(
+            "SELECT * FROM settlement_months WHERE batch_id=? ORDER BY month",
+            (batch_id,))
+        for row in rows:
+            for key in ("net_amount", "purchase_kwh", "feedin_kwh"):
+                row[key] = _dec(row[key])
+            row["supplements"] = json.loads(row.pop("supplements_json") or "[]")
+        return rows
+
+    def load_settlement_lines(self, batch_id: str) -> list[dict]:
+        rows = self._all(
+            "SELECT * FROM settlements WHERE batch_id=? ORDER BY month, meter_id, "
+            "CASE direction WHEN 'PURCHASE' THEN 0 ELSE 1 END", (batch_id,))
+        for row in rows:
+            for key in ("usage_kwh", "price", "amount_yuan"):
+                row[key] = _dec(row[key])
+            row["included"] = bool(row["included"])
+            row["provisional"] = bool(row["provisional"])
+        return rows
+
+    def load_settlement_readings(self, batch_id: str) -> list[dict]:
+        rows = self._all(
+            "SELECT * FROM settlement_readings WHERE batch_id=? "
+            "ORDER BY CASE source WHEN 'base' THEN 0 ELSE 1 END, sample, lineno",
+            (batch_id,))
+        for row in rows:
+            row["reading"] = _dec(row.pop("reading_kwh"))
+        return rows
+
+    def load_settlement_conflicts(self, batch_id: str) -> list[dict]:
+        return self._all(
+            "SELECT * FROM settlement_conflicts WHERE batch_id=? ORDER BY meter_id, "
+            "register, read_at, source, lineno", (batch_id,))
+
+    def load_settlement_inputs(self, batch_id: str) -> list[dict]:
+        return self._all(
+            "SELECT * FROM settlement_inputs WHERE batch_id=? ORDER BY sample",
+            (batch_id,))
+
+    def load_settlement_checks(self, batch_id: str) -> dict:
+        rows = self._all(
+            "SELECT key, value FROM settlement_checks WHERE batch_id=?", (batch_id,))
+        return {row["key"]: row["value"] for row in rows}
+
+    # ---------- 发布版本 ----------
+    def latest_versions(self, stream_id: str) -> dict[str, dict]:
+        """每个月份的最新版本（seq 最大）。"""
+        rows = self._all(
+            "SELECT * FROM settlement_versions WHERE stream_id=? ORDER BY month, seq DESC",
+            (stream_id,))
+        out: dict[str, dict] = {}
+        for row in rows:
+            if row["month"] in out:
+                continue
+            row["payload"] = json.loads(row["payload_json"])
+            out[row["month"]] = row
+        return out
+
+    def list_versions(self, stream_id: str, month: str | None = None) -> list[dict]:
+        if month:
+            rows = self._all(
+                "SELECT * FROM settlement_versions WHERE stream_id=? AND month=? "
+                "ORDER BY seq", (stream_id, month))
+        else:
+            rows = self._all(
+                "SELECT * FROM settlement_versions WHERE stream_id=? "
+                "ORDER BY month, seq", (stream_id,))
+        for row in rows:
+            row["payload"] = json.loads(row["payload_json"])
+        return rows
+
+    def get_version(self, version_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM settlement_versions WHERE version_id=?",
+                (version_id,)).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["payload"] = json.loads(out["payload_json"])
+        return out
+
+    def append_version(self, conn, *, version_id: str, stream_id: str, batch_id: str,
+                       month: str, content_hash: str, created_at: str, status: str,
+                       note: str, payload: dict) -> dict:
+        """在同一事务内追加版本：同月同内容不新增版本，旧版只置为 superseded。"""
+        latest = conn.execute(
+            "SELECT * FROM settlement_versions WHERE stream_id=? AND month=? "
+            "ORDER BY seq DESC LIMIT 1", (stream_id, month)).fetchone()
+        if latest is not None and latest["content_hash"] == content_hash:
+            return {"created": False, "version_id": latest["version_id"],
+                    "seq": latest["seq"], "status": latest["status"]}
+        seq = 1 if latest is None else latest["seq"] + 1
+        conn.execute(
+            "UPDATE settlement_versions SET status='superseded' "
+            "WHERE stream_id=? AND month=? AND status='published'",
+            (stream_id, month))
+        conn.execute(
+            """INSERT INTO settlement_versions (version_id,stream_id,batch_id,month,
+                seq,content_hash,created_at,status,note,payload_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (version_id, stream_id, batch_id, month, seq, content_hash, created_at,
+             status, note, json.dumps(payload, ensure_ascii=False)))
+        return {"created": True, "version_id": version_id, "seq": seq,
+                "status": status}
+
+    def save_settlement(self, *, batch_id: str, settlement: dict,
+                        stream_id: str, versions: list[dict], publish: bool) -> dict:
+        with self.connect() as conn:
+            self._write_settlement(conn, batch_id, settlement)
+            results = []
+            for item in versions:
+                results.append(self.append_version(
+                    conn, version_id=item["version_id"], stream_id=stream_id,
+                    batch_id=batch_id, month=item["month"],
+                    content_hash=item["content_hash"], created_at=item["created_at"],
+                    status="published" if publish else "draft",
+                    note=item.get("note", ""), payload=item["payload"]))
+        return {"touched": results, "publish": publish}
+
     # ---------- 一次运行整体落库 ----------
     def save_run(self, *, batch: dict, meters: list[dict], readings: list[dict],
                  intervals: list[dict], allocations: list[dict], bills: list[dict],
                  quarantine: list[dict], stages: list[dict], totals: dict,
-                 manifest_json: dict) -> None:
+                 manifest_json: dict, settlement: dict | None = None,
+                 stream_id: str | None = None,
+                 versions: list[dict] | None = None) -> None:
         b = batch["batch_id"]
         with self.connect() as conn:
             for table in ("meters", "readings", "intervals", "allocations", "bills",
@@ -249,6 +490,16 @@ class Store:
             for key, value in totals.items():
                 conn.execute("INSERT INTO totals (batch_id,key,value) VALUES (?,?,?)",
                              (b, key, str(value)))
+            if settlement is not None:
+                self._write_settlement(conn, b, settlement)
+            if stream_id and versions:
+                for item in versions:
+                    self.append_version(
+                        conn, version_id=item["version_id"], stream_id=stream_id,
+                        batch_id=b, month=item["month"],
+                        content_hash=item["content_hash"],
+                        created_at=item["created_at"], status="published",
+                        note=item.get("note", ""), payload=item["payload"])
             conn.execute(
                 "INSERT INTO manifests (batch_id,json) VALUES (?,?) "
                 "ON CONFLICT(batch_id) DO UPDATE SET json=excluded.json",

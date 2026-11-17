@@ -16,6 +16,8 @@ REGISTER_ALIASES = {
     "peak": "PEAK", "峰": "PEAK", "尖峰": "PEAK",
     "flat": "FLAT", "平": "FLAT", "平段": "FLAT",
     "valley": "VALLEY", "谷": "VALLEY", "低谷": "VALLEY",
+    "purchase": "PURCHASE", "购电": "PURCHASE", "正向": "PURCHASE",
+    "feedin": "FEEDIN", "feed_in": "FEEDIN", "上网": "FEEDIN", "反向": "FEEDIN",
 }
 
 UNIT_SUFFIXES = ("kwh", "mwh", "度", "千瓦时", "兆瓦时")

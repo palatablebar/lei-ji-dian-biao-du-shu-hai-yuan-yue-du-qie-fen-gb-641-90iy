@@ -1,0 +1,3 @@
+meter_id,register,read_at,reading,unit,read_type,note
+P001,FEEDIN,2026-06-01T00:00:00+08:00,650.0,kWh,N,补抄上网
+P002,PURCHASE,2026-06-01T00:00:00+08:00,800.0,kWh,N,补抄购电

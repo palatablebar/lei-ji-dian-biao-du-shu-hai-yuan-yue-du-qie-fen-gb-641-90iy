@@ -22,6 +22,8 @@ NAV = (
     ("/readings", "读数诊断", "readings"),
     ("/intervals", "区间还原", "intervals"),
     ("/months", "月度分摊", "months"),
+    ("/settlement", "双向净结算", "settlement"),
+    ("/ledger", "双向台账", "ledger"),
     ("/batches", "批次对账", "batches"),
     ("/export", "导出", "export"),
 )
@@ -31,6 +33,15 @@ STATUS_LABELS = {
     "valid": "有效", "estimate": "估抄", "quarantine": "隔离",
     "normal": "常规", "rollover": "满量翻转", "replacement_first": "新表首读",
     "replacement_last": "换表末读", "ok": "就绪", "skipped": "跳过",
+    "duplicate": "重复", "conflict": "冲突",
+}
+# 结算状态单独一张表：`partial` 在批次里是「未完成」，在结算里是「缺向暂结」。
+SETTLE_LABELS = {
+    "settled": "已结清", "partial": "缺向暂结", "blocked": "不可结算",
+    "adopted": "采用", "suspended": "暂挂",
+    "new": "新增", "supplement": "补抄", "revised": "修订", "unchanged": "未变",
+    "revoked": "撤回", "published": "已发布", "draft": "草稿",
+    "superseded": "已被替代",
 }
 METHOD_LABELS = {
     "normal": "常规", "rollover": "满量翻转",
@@ -64,6 +75,8 @@ def setup(app) -> None:
     env.filters["method"] = lambda m: METHOD_LABELS.get(m, m or "—")
     env.filters["code"] = reasons.label
     env.filters["status"] = lambda s: STATUS_LABELS.get(s, s or "—")
+    env.filters["settle"] = lambda s: SETTLE_LABELS.get(s, s or "—")
+    env.filters["signed_yuan"] = fmt_signed_yuan
     env.filters["dec"] = fmt_dec
     env.filters["unitnum"] = fmt_unit
     env.filters["days"] = fmt_days
@@ -156,6 +169,14 @@ def fmt_dec(value, places: int = 3) -> str:
     if number is None:
         return "—"
     return f"{number:,.{places}f}"
+
+
+def fmt_signed_yuan(value) -> str:
+    """净额带符号：正数是应缴，负数是应退（上网收益大于购电支出）。"""
+    number = _dec(value)
+    if number is None:
+        return "—"
+    return f"{number:+,.2f}"
 
 
 def fmt_unit(value, unit: str = "") -> str:

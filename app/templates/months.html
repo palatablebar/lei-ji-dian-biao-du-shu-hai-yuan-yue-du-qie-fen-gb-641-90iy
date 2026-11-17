@@ -18,6 +18,39 @@
 {% if not groups %}
 <section class="empty"><p class="empty-line">没有分摊结果，先跑一次处理。</p></section>
 {% else %}
+{% if settlement %}
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">双向净结算（本月口径）</h2>
+    <span class="panel-sub mono">购电、上网分别计价后轧差；缺向侧暂挂不并入净额</span>
+    <a class="link" href="/settlement">查看结算与发布版本</a>
+  </div>
+  <div class="table-wrap">
+    <table class="table table-dense">
+      <thead><tr><th>月份</th><th>状态</th><th class="num">购电kWh</th><th class="num">上网kWh</th>
+        <th class="num">暂挂方向</th><th class="num">净款元</th><th>版本</th></tr></thead>
+      <tbody>
+        {% for row in settlement.months %}
+        <tr class="{{ 'row-held' if row.status == 'partial' else '' }}">
+          <td class="mono">{{ row.month }}</td>
+          <td><span class="badge badge-{{ 'ok' if row.status == 'settled' else 'warn' }}">{{ row.status|settle }}</span></td>
+          <td class="num mono">{{ row.purchase_kwh|kwh }}</td>
+          <td class="num mono">{{ row.feedin_kwh|kwh }}</td>
+          <td class="num mono">{{ row.held_count }}</td>
+          <td class="num mono strong">{{ row.net_amount|signed_yuan }}</td>
+          <td class="mono">
+            {% if row.version %}<a class="link" href="/settlement?version_id={{ row.version.version_id }}">{{ row.version.version_id }}</a>
+            {% if row.version_count > 1 %}<span class="panel-sub">· {{ row.version_count }} 版</span>{% endif %}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 <section class="kpis" aria-label="月度合计">
   <div class="kpi"><span class="kpi-label">月份</span><span class="kpi-value mono">{{ totals.month_count }}</span></div>
   <div class="kpi"><span class="kpi-label">月度用量</span><span class="kpi-value mono">{{ totals.month_usage|kwh }}</span><span class="kpi-unit">kWh</span></div>

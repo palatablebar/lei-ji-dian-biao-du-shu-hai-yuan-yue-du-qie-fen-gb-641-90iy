@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="page-head">
+  <div>
+    <h1 class="page-title">双向净结算</h1>
+    <p class="page-meta mono">
+      {% if batch %}{{ batch.batch_id }} · {{ batch.sample }} · 发布流 {{ view.stream }}{% else %}未运行{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <label class="field-inline">
+      <span class="field-label">补抄包</span>
+      <select id="supplement-select" class="select">
+        <option value="">不追加</option>
+        {% for item in sample_options %}
+        <option value="{{ item.name }}"{% if not item.exists %} disabled{% endif %}>{{ item.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="btn btn-primary" id="publish-button" type="button">补抄并发布</button>
+    <button class="btn btn-ghost" id="republish-button" type="button">重发当前版本</button>
+    <a class="btn btn-ghost" href="/api/settlement.csv">当前结算 CSV</a>
+    <a class="btn btn-ghost" href="/ledger">两向读数台账</a>
+  </div>
+</section>
+
+<div class="notice" id="notice" role="status" hidden></div>
+
+{% if not view.months %}
+<section class="empty"><p class="empty-line">没有结算结果：先跑一次含双向表读数的批次。</p></section>
+{% else %}
+<section class="kpis" aria-label="结算合计">
+  <div class="kpi"><span class="kpi-label">月份</span><span class="kpi-value mono">{{ view.totals.month_count }}</span></div>
+  <div class="kpi"><span class="kpi-label">已结清</span><span class="kpi-value mono">{{ view.totals.settled_months }}</span></div>
+  <div class="kpi"><span class="kpi-label">缺向暂结</span><span class="kpi-value mono">{{ view.totals.partial_months }}</span></div>
+  <div class="kpi"><span class="kpi-label">暂挂方向</span><span class="kpi-value mono">{{ view.totals.held_directions }}</span></div>
+  <div class="kpi"><span class="kpi-label">购电</span><span class="kpi-value mono">{{ view.totals.purchase_kwh|kwh }}</span><span class="kpi-unit">kWh</span></div>
+  <div class="kpi"><span class="kpi-label">上网</span><span class="kpi-value mono">{{ view.totals.feedin_kwh|kwh }}</span><span class="kpi-unit">kWh</span></div>
+  <div class="kpi"><span class="kpi-label">净款</span><span class="kpi-value mono">{{ view.totals.net_amount|signed_yuan }}</span><span class="kpi-unit">元</span></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">月度净结算</h2>
+    <span class="panel-sub mono">购电按购电价、上网按上网价分别计价后轧差；缺向侧不并入净额</span>
+  </div>
+  {% for month in view.months %}
+  <div class="settle-month">
+    <div class="settle-month-head">
+      <h3 class="panel-title mono">{{ month.month }}</h3>
+      <span class="badge badge-{{ 'ok' if month.status == 'settled' else 'warn' }}">{{ month.status|settle }}</span>
+      <span class="mono settle-net">净款 {{ month.net_amount|signed_yuan }} 元</span>
+      <span class="mono panel-sub">
+        购电 {{ month.purchase_kwh|kwh }} kWh · 上网 {{ month.feedin_kwh|kwh }} kWh
+        {% if month.held_count %}· 暂挂 {{ month.held_count }} 向{% endif %}
+      </span>
+      {% if month.status == 'partial' %}<span class="badge badge-warn">K_SETTLED_PARTIAL</span>{% endif %}
+      {% if month.version %}
+      <a class="link mono" href="/settlement?version_id={{ month.version.version_id }}">{{ month.version.version_id }}</a>
+      {% endif %}
+    </div>
+    <div class="table-wrap">
+      <table class="table table-dense">
+        <thead><tr><th>表号</th><th>方向</th><th>采用状态</th><th class="num">用量</th>
+          <th class="num">电价</th><th class="num">金额</th><th class="num">计入净额</th><th>说明</th></tr></thead>
+        <tbody>
+          {% for line in month.lines %}
+          <tr class="{{ 'row-held' if line.state == 'suspended' else '' }}">
+            <td class="mono">{{ line.meter_id }}</td>
+            <td>{{ line.direction|reg }}</td>
+            <td><span class="badge badge-{{ 'warn' if line.state == 'suspended' else 'ok' }}">{{ line.state|settle }}</span></td>
+            <td class="num mono">{{ line.usage_kwh|kwh }}</td>
+            <td class="num mono">{{ line.price }}</td>
+            <td class="num mono">{{ line.amount_yuan|yuan }}</td>
+            <td class="num mono">{{ '是' if line.included else '否' }}</td>
+            <td class="cell-note">
+              {% if line.state == 'suspended' %}读数未到，暂挂不并入净额，补抄后发布新版本
+              {% elif line.reason == 'K_NET_ZERO' %}有效零读数
+              {% else %}已按本方向电价计价{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">发布版本</h2>
+    <span class="panel-sub mono">内容不变不新增版本；补抄后追加新版，旧版保留可复核</span>
+  </div>
+  {% for month, items in view.versions.items() %}
+  <div class="version-block">
+    <h3 class="panel-title mono">{{ month }}</h3>
+    <table class="table table-dense">
+      <thead><tr><th>版本</th><th>状态</th><th class="num">净款</th><th>较上版</th><th>变化额</th><th>说明</th><th>发布时刻</th><th>下载</th></tr></thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td class="mono">{{ item.version_id }}</td>
+          <td><span class="badge badge-{{ 'ok' if item.status == 'published' else 'plain' }}">{{ item.status|settle }}</span></td>
+          <td class="num mono">{{ item.net_amount }}</td>
+          <td>{{ item.change.change|settle if item.change else '—' }}</td>
+          <td class="num mono">{{ item.change.net_delta if item.change else '—' }}</td>
+          <td class="cell-note">{{ item.note }}</td>
+          <td class="mono">{{ item.created_at|localdt }}</td>
+          <td><a class="link" href="/api/settlement/{{ item.version_id }}.csv">CSV</a>
+            {% if item.change and item.change.change not in ('new', 'unchanged') %}
+            <a class="link" href="/api/settlement/{{ item.version_id }}-change.csv">变化</a>
+            {% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+</section>
+
+{% if selected %}
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">版本复核 · {{ selected.version_id }}</h2>
+    <span class="badge badge-{{ 'ok' if selected.status == 'published' else 'plain' }}">{{ selected.status|settle }}</span>
+    <span class="panel-sub mono">{{ selected.created_at|localdt }} · 内容哈希 {{ selected.content_hash[:16] }}</span>
+  </div>
+  <p class="panel-sub">
+    状态 {{ selected.status|settle }} · 净款 {{ selected.net_amount }} 元
+    {% if selected.previous_version_id %}· 上一版 {{ selected.previous_version_id }}{% endif %}
+  </p>
+  {% if selected.change %}
+  <p class="panel-sub mono">
+    较上版：{{ selected.change.change|settle }}
+    {% if selected.change.status_from %}（{{ selected.change.status_from|settle }} → {{ selected.change.status_to|settle }}）{% endif %}
+    · 净款变化 {{ selected.change.net_delta }} 元
+  </p>
+  {% if history and history|length > 1 %}
+  <p class="panel-sub">
+    同月版本：
+    {% for item in history %}
+    <a class="link mono{% if item.version_id == selected.version_id %} strong{% endif %}"
+       href="/settlement?version_id={{ item.version_id }}">{{ item.version_id }}</a>
+    <span class="badge badge-{{ 'ok' if item.status == 'published' else 'plain' }}">{{ item.status|settle }}</span>
+    {% if not loop.last %}<span class="dot-sep">·</span>{% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
+  <div class="table-wrap">
+    <table class="table table-dense">
+      <thead><tr><th>表号</th><th>方向</th><th>变化</th><th class="num">原用量</th><th class="num">现用量</th><th class="num">原金额</th><th class="num">现金额</th></tr></thead>
+      <tbody>
+        {% for line in selected.change.lines %}
+        <tr>
+          <td class="mono">{{ line.meter_id }}</td>
+          <td>{{ line.direction|reg }}</td>
+          <td><span class="badge badge-{{ 'warn' if line.change == 'supplement' else 'plain' }}">{{ line.change|settle }}</span></td>
+          <td class="num mono">{{ line.usage_from }}</td>
+          <td class="num mono">{{ line.usage_to }}</td>
+          <td class="num mono">{{ line.amount_from }}</td>
+          <td class="num mono">{{ line.amount_to }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if selected.supplement_readings %}
+  <h3 class="panel-title">补抄读数</h3>
+  <table class="table table-dense">
+    <thead><tr><th>样例</th><th>行号</th><th>表号</th><th>方向</th><th>抄表时间</th><th class="num">读数</th><th>边界</th></tr></thead>
+    <tbody>
+      {% for row in selected.supplement_readings %}
+      <tr>
+        <td class="mono">{{ row.sample }}</td>
+        <td class="mono">{{ row.lineno }}</td>
+        <td class="mono">{{ row.meter_id }}</td>
+        <td>{{ row.direction }}</td>
+        <td class="mono">{{ row.read_at|localdt }}</td>
+        <td class="num mono">{{ row.reading }}</td>
+        <td>{{ row.boundary }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">读数台账对账</h2>
+    <span class="badge badge-{{ 'ok' if view.checks.balanced else 'bad' }}">{{ '平衡' if view.checks.balanced else '不平' }}</span>
+  </div>
+  <p class="panel-sub mono">
+    输入 {{ view.checks.input_rows }} = 采用 {{ view.checks.adopted }} + 重复 {{ view.checks.duplicate }}
+    + 冲突 {{ view.checks.conflict }} + 隔离 {{ view.checks.quarantine }}
+  </p>
+  <p class="panel-sub">
+    <a class="link" href="/ledger">查看两向原始读数与隔离证据</a>
+  </p>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script src="/static/app.js" type="module"></script>
+<script src="/static/settlement.js" type="module"></script>
+{% endblock %}

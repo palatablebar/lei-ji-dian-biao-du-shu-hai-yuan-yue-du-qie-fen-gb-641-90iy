@@ -60,3 +60,39 @@ def test_pages_render_without_any_batch(client):
         assert "empty-line" in page.text
     assert client.get("/api/quarantine").json()["rows"] == []
     assert client.get("/api/reconcile").json()["accounts"] == []
+
+
+def test_pv_pipeline_over_http_with_supplement(client):
+    """光伏双向：缺向暂结 → 补抄发布新版 → 旧版仍可下载复核。"""
+    run = client.post("/api/runs", json={"sample": "readings_pv.csv"})
+    assert run.status_code == 200
+    assert run.json()["status"] == "done"
+    stages = {item["stage"]: item for item in run.json()["stages"]}
+    assert stages["settlement"]["status"] == "ok"
+    assert "缺向" in stages["settlement"]["note"]
+
+    for path in ("/settlement", "/ledger"):
+        page = client.get(path)
+        assert page.status_code == 200, path
+        assert "双向" in page.text
+
+    before = client.get("/api/settlement").json()
+    assert before["totals"]["partial_months"] == 1
+    assert before["totals"]["net_amount"] == "612.00"
+    old_version = before["versions"]["2026-05"][0]["version_id"]
+
+    published = client.post("/api/settlement/publish",
+                            json={"supplements": ["readings_pv_supplement.csv"]})
+    assert published.status_code == 200
+    after = client.get("/api/settlement").json()
+    assert after["totals"]["partial_months"] == 0
+    assert after["totals"]["net_amount"] == "654.00"
+    assert len(after["versions"]["2026-05"]) == 2
+
+    old_csv = client.get(f"/api/settlement/{old_version}.csv")
+    assert old_csv.status_code == 200
+    assert "暂挂" in old_csv.text
+
+    for path in ("/", "/readings", "/intervals", "/months", "/settlement",
+                 "/ledger", "/batches", "/export"):
+        assert client.get(path).status_code == 200, path

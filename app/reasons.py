@@ -16,6 +16,8 @@ REASONS: dict[str, dict[str, str]] = {
     "E_SAMPLE_UNKNOWN": {"label": "样例不存在", "level": "error"},
     "E_CONTRACT_INVALID": {"label": "表计契约无效", "level": "error"},
     "E_BATCH_NOT_FOUND": {"label": "批次不存在", "level": "error"},
+    "E_SETTLEMENT_MISSING": {"label": "结算结果不存在", "level": "error"},
+    "E_PUBLISH_NOT_FOUND": {"label": "发布版本不存在", "level": "error"},
     "Q_COLUMN_COUNT": {"label": "列数与表头不一致", "level": "error"},
     "Q_TRUNCATED_ROW": {"label": "末行被截断", "level": "error"},
     "Q_MISSING_READING": {"label": "读数为空值哨兵", "level": "error"},
@@ -42,6 +44,9 @@ REASONS: dict[str, dict[str, str]] = {
     "K_UNIT_ASSUMED": {"label": "单位按契约补齐", "level": "info"},
     "K_UNIT_CONVERTED": {"label": "单位已折算", "level": "info"},
     "K_DUPLICATE_IDENTICAL": {"label": "重复行已合并", "level": "info"},
+    "K_DIRECTION_HELD": {"label": "缺向侧已暂挂", "level": "warn"},
+    "K_SETTLED_PARTIAL": {"label": "缺向月份按单方向暂结", "level": "warn"},
+    "K_NET_ZERO": {"label": "本方向用量为零", "level": "info"},
 }
 
 

@@ -226,3 +226,19 @@ th[data-key].is-sorted::after { content: " ▾"; font-size: 10px; }
   .foot { border-top: 1px solid #999; }
   .foot::before { content: "meterback 打印件"; color: #555; }
 }
+
+/* 双向净结算：缺向行压暗，仍可读；月度块之间留白 */
+.settle-month { padding: 10px 0; border-bottom: 1px dotted var(--line); }
+.settle-month:last-child { border-bottom: none; padding-bottom: 0; }
+.settle-month-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.settle-net { font-weight: 600; font-size: 13px; }
+.version-block { padding: 8px 0; border-bottom: 1px dotted var(--line); }
+.version-block:last-child { border-bottom: none; }
+.table tbody tr.row-held { background: #fdf8ee; }
+.table tbody tr.row-held:hover { background: #faf1dd; }

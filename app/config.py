@@ -18,16 +18,29 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHINA_TZ = dt.timezone(dt.timedelta(hours=8), "Asia/Shanghai")
 UTC = dt.timezone.utc
 
-RULE_VERSION = "meterback/1.0.0"
+RULE_VERSION = "meterback/1.1.0"
 
 USAGE_QUANT = Decimal("0.001")
 MONEY_QUANT = Decimal("0.01")
 # 满量翻转判定：上一条读数需达到满量的这个比例，否则按倒走隔离
 ROLLOVER_MIN_RATIO = Decimal("0.9")
 
-REGISTERS = ("TOTAL", "PEAK", "FLAT", "VALLEY")
-REGISTER_LABELS = {"TOTAL": "总", "PEAK": "峰", "FLAT": "平", "VALLEY": "谷"}
+REGISTERS = ("TOTAL", "PEAK", "FLAT", "VALLEY", "PURCHASE", "FEEDIN")
+REGISTER_LABELS = {"TOTAL": "总", "PEAK": "峰", "FLAT": "平", "VALLEY": "谷",
+                   "PURCHASE": "购电", "FEEDIN": "上网"}
 TOU_REGISTERS = ("PEAK", "FLAT", "VALLEY")
+
+# 双向表（光伏户）：购电与上网各一道累计读数，分别计价后再轧差，绝不能用净电量套单一电价。
+DIRECTION_REGISTERS = ("PURCHASE", "FEEDIN")
+DIRECTION_LABELS = {"PURCHASE": "购电", "FEEDIN": "上网"}
+# 净额方向：购电是支出（正），上网是抵扣（负）。
+DIRECTION_SIGNS = {"PURCHASE": Decimal("1"), "FEEDIN": Decimal("-1")}
+SETTLEMENT_SCOPE = "pv-net"
+SETTLEMENT_STATUS_LABELS = {
+    "adopted": "采用", "suspended": "暂挂",
+    "settled": "已结清", "partial": "缺向暂结", "blocked": "不可结算",
+    "new": "新增", "supplement": "补抄", "revised": "修订", "unchanged": "未变",
+}
 
 # 单位 → kWh 换算系数（读数先归一到契约单位，用量再折 kWh）
 UNIT_TO_KWH = {
@@ -46,17 +59,19 @@ READ_TYPE_ALIASES = {
     "e": "E", "估抄": "E", "估算": "E",
 }
 
-STAGES = ("ingest", "contract", "quality", "restore", "allocate", "reconcile", "export")
+STAGES = ("ingest", "contract", "quality", "restore", "allocate", "settlement",
+          "reconcile", "export")
 STAGE_LABELS = {
     "ingest": "采信",
     "contract": "契约",
     "quality": "质量",
     "restore": "还原",
     "allocate": "切分",
+    "settlement": "结算",
     "reconcile": "对账",
     "export": "导出",
 }
-STAGE_FLOW = "采信 → 契约 → 质量 → 还原 → 切分 → 对账 → 导出"
+STAGE_FLOW = "采信 → 契约 → 质量 → 还原 → 切分 → 结算 → 对账 → 导出"
 
 # 列契约：规范列名 → 可接受的别名（GBK 导出的表头是中文）
 COLUMN_ALIASES = {
@@ -80,6 +95,8 @@ SAMPLES = {
     "readings_header_only.csv": "仅表头",
     "readings_blank.csv": "全空行",
     "readings_bad_header.csv": "表头缺列",
+    "readings_pv.csv": "光伏双向 · 缺向月份",
+    "readings_pv_supplement.csv": "光伏双向 · 补抄上网",
 }
 DEFAULT_SAMPLE = "readings_dirty.csv"
 METERS_FILE = "meters.csv"
@@ -87,7 +104,8 @@ PRICES_FILE = "prices.csv"
 
 # 单一制电价兜底（prices.csv 缺失时）
 DEFAULT_PRICES = {"TOTAL": Decimal("0.65"), "PEAK": Decimal("1.05"),
-                  "FLAT": Decimal("0.65"), "VALLEY": Decimal("0.32")}
+                  "FLAT": Decimal("0.65"), "VALLEY": Decimal("0.32"),
+                  "PURCHASE": Decimal("0.60"), "FEEDIN": Decimal("0.40")}
 
 
 @dataclass(frozen=True)

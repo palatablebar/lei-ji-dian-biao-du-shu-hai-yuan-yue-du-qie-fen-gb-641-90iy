@@ -7,7 +7,7 @@
 | 规范列名 | 可接受别名 | 类型 | 单位 | 可空 | 说明 |
 |---|---|---|---|---|---|
 | `meter_id` | 表号 / 电能表 / 电表编号 / meter | 字符串 | — | 否 | 前导零保形，`007` ≠ `7` |
-| `register` | 寄存器 / 分量 / 费率 | 枚举 | — | 否 | `TOTAL` 总 / `PEAK` 峰 / `FLAT` 平 / `VALLEY` 谷，也接受 总/峰/平/谷 |
+| `register` | 寄存器 / 分量 / 费率 | 枚举 | — | 否 | `TOTAL` 总 / `PEAK` 峰 / `FLAT` 平 / `VALLEY` 谷，也接受 总/峰/平/谷；双向表用 `PURCHASE` 购电（也接受 正向）/ `FEEDIN` 上网（也接受 反向） |
 | `read_at` | 抄表时间 / 抄见时间 / 时间 | 时间 | — | 否 | 带偏移按偏移换算；无偏移按 +08:00；纯日期取当日 00:00 |
 | `reading` | 读数 / 示数 / 累计读数 | 十进制 | 见表内 `unit` | 否 | 累计示数，不是用量 |
 | `unit` | 单位 / 计量单位 | 枚举 | — | 是 | `kWh` / `度` / `千瓦时` / `MWh` / `兆瓦时`；空则取契约单位 |
@@ -28,12 +28,15 @@
 | `replaced_by` | 新表号 | 必须存在于契约 |
 
 主寄存器：有 `TOTAL` 取 `TOTAL`，否则取第一个分量。区间账与月度账只统计主寄存器，避免与峰平谷重复计数。
+双向（光伏）表的 `registers` 同时含 `PURCHASE` 与 `FEEDIN`：主寄存器取 `PURCHASE`（购电是支出方向），
+上网方向不并入电量守恒账，只在净结算里单独计价。契约里只写一个方向的不算双向表。
 
 ## 3 数值与精度
 
 - 用量：`Decimal`，单位 kWh，最小刻度 `0.001`；量化只发生在区间用量、月度分摊、分量闭合三处。
 - 金额：`Decimal`，单位元，最小刻度 `0.01`；量化只发生在账单合计与分项补差两处。
-- 电价：元/kWh，`prices.csv`（`TOTAL 0.65`、`PEAK 1.05`、`FLAT 0.65`、`VALLEY 0.32`）。
+- 电价：元/kWh，`prices.csv`（`TOTAL 0.65`、`PEAK 1.05`、`FLAT 0.65`、`VALLEY 0.32`、
+  `PURCHASE 0.60`、`FEEDIN 0.40`）。
 - 对外 JSON 与 CSV：用量三位小数、金额两位小数，全部以字符串输出，禁止 float 往返。
 
 ## 4 时间与分桶
@@ -75,10 +78,31 @@
 
 ## 9 原因码
 
-文件级 `E_*`：`E_EMPTY_FILE`、`E_HEADER_ONLY`、`E_ALL_BLANK`、`E_HEADER_INVALID`、`E_DECODE`、`E_SAMPLE_UNKNOWN`、`E_CONTRACT_INVALID`、`E_BATCH_NOT_FOUND`。
+文件级 `E_*`：`E_EMPTY_FILE`、`E_HEADER_ONLY`、`E_ALL_BLANK`、`E_HEADER_INVALID`、`E_DECODE`、`E_SAMPLE_UNKNOWN`、`E_CONTRACT_INVALID`、`E_BATCH_NOT_FOUND`、`E_SETTLEMENT_MISSING`、`E_PUBLISH_NOT_FOUND`。
 
 行级 `Q_*`：`Q_COLUMN_COUNT`、`Q_TRUNCATED_ROW`、`Q_MISSING_READING`、`Q_BAD_READING`、`Q_BAD_TIME`、`Q_UNKNOWN_METER`、`Q_BAD_REGISTER`、`Q_BAD_UNIT`、`Q_BAD_READ_TYPE`、`Q_NEGATIVE_READING`、`Q_EXCEEDS_CAPACITY`、`Q_REVERSE_READING`、`Q_DUPLICATE_CONFLICT`、`Q_METER_RETIRED`。
 
-标记 `K_*`：`K_ROLLOVER`、`K_REPLACEMENT_FIRST`、`K_ESTIMATE_SKIPPED`、`K_CHARSET_FALLBACK`、`K_BOM_STRIPPED`、`K_SEGMENT_SPLIT`、`K_TRUNCATED_TAIL`、`K_TOU_ADJUSTED`、`K_BILL_ROUNDED`、`K_UNIT_ASSUMED`、`K_UNIT_CONVERTED`、`K_DUPLICATE_IDENTICAL`。
+标记 `K_*`：`K_ROLLOVER`、`K_REPLACEMENT_FIRST`、`K_ESTIMATE_SKIPPED`、`K_CHARSET_FALLBACK`、`K_BOM_STRIPPED`、`K_SEGMENT_SPLIT`、`K_TRUNCATED_TAIL`、`K_TOU_ADJUSTED`、`K_BILL_ROUNDED`、`K_UNIT_ASSUMED`、`K_UNIT_CONVERTED`、`K_DUPLICATE_IDENTICAL`、`K_DIRECTION_HELD`、`K_SETTLED_PARTIAL`、`K_NET_ZERO`。
 
 唯一来源：`app/reasons.py`；页面与导出的原因文案都从它取。
+
+## 10 双向净结算（光伏户）
+
+| 概念 | 定义 |
+|---|---|
+| 双向表 | 契约 `registers` 同时含 `PURCHASE` 与 `FEEDIN` 的表；只有一道读数的按单向处理 |
+| 方向用量 | 每个方向各自按 `[起, 止)` 区间还原，再按 M5 的最大余额法切月；0 用量是有效读数 |
+| 方向覆盖 | 某方向在某月有区间覆盖即算「读数已到」，与用量是否为 0 无关 |
+| 计费 | 购电金额 = 购电量 × `PURCHASE` 电价；上网金额 = 上网量 × `FEEDIN` 电价，两条分别计入再轧差 |
+| 净额 | 购电金额 − 上网金额，量化到 0.01 元；正数是应缴，负数是应退 |
+| 缺向 | 同户同月只有一个方向有区间覆盖；另一个方向进台账但无区间 |
+| 暂挂 | 缺向侧结算行 `state=suspended`、`included=0`、`usage_kwh=0.000`、`provisional=1`，不并入净额 |
+| 月度状态 | 两向齐 = `settled`；缺一向 = `partial`（按已到方向单方向暂结）；两向都缺 = 不出行 |
+| 台账 | 基础批次 + 补抄包按 `(表号, 寄存器, UTC 时间)` 合并；同键同值合并、同键不同值全部留痕 |
+| 台账分区 | 输入行 = 采用 + 重复 + 冲突 + 隔离，四项必须闭合 |
+| 版本 | 每月一份不可变快照；内容哈希相同不新增版本，变化追加 `seq`，旧版标 `superseded` 并保留整份 JSON |
+| 补抄变化 | 本版相对上一版逐户逐方向标 `new / supplement / revised / unchanged / revoked`，并给出净款差 |
+
+缺向月份**不**用「购电量 − 上网量」的净电量套单一电价：缺的那一向会被当成 0，
+把上网收益算丢（或把缺的购电算成倒送）。判定与净额规则分别在
+`app/modules/m8_settlement/compute.py`、`ledger.py`，版本在 `publish.py`。

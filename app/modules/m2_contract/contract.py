@@ -33,8 +33,24 @@ class MeterContract:
 
     @property
     def primary_register(self) -> str:
-        """主寄存器：总表优先，没有总表就取第一个分量。"""
+        """主寄存器：总表优先，没有总表就取第一个分量。
+
+        双向（光伏）表没有「总表」概念：购电是净额支出方向，用它做区间账与
+        月度账的锚点；上网方向走独立结算，不并入电量守恒。
+        """
+        if self.is_bidirectional:
+            return config.DIRECTION_REGISTERS[0]
         return "TOTAL" if "TOTAL" in self.registers else self.registers[0]
+
+    @property
+    def directions(self) -> tuple[str, ...]:
+        return tuple(name for name in config.DIRECTION_REGISTERS
+                     if name in self.registers)
+
+    @property
+    def is_bidirectional(self) -> bool:
+        """购电、上网两道累计读数都在契约里，才是双向结算表。"""
+        return all(name in self.registers for name in config.DIRECTION_REGISTERS)
 
     @property
     def rollover_floor(self) -> Decimal:
@@ -153,6 +169,8 @@ def payload(contracts: dict[str, MeterContract]) -> list[dict]:
             "registers": [config.REGISTER_LABELS.get(r, r) for r in contract.registers],
             "primary_register": config.REGISTER_LABELS.get(contract.primary_register,
                                                            contract.primary_register),
+            "directions": [config.REGISTER_LABELS.get(r, r) for r in contract.directions],
+            "settlement_scope": config.SETTLEMENT_SCOPE if contract.is_bidirectional else "",
             "replaced_at": (contract.replaced_at.isoformat()
                             if contract.replaced_at else None),
             "replaced_by": contract.replaced_by,

@@ -50,20 +50,30 @@ def manifest_json(settings, store, batch_id: str | None = None) -> tuple[str, st
     return manifest_out.render_json(payload), f"manifest-{ident}.json"
 
 
+def settlement_csv(settings, store, batch_id: str | None = None) -> tuple[str, str]:
+    batch, ident = _context(settings, store, batch_id)
+    from ..m8_settlement import store_view
+    return store_view.settlement_csv(store, ident)
+
+
 EXPORTS = {
     "monthly": ("月度分摊 CSV", monthly_csv, "text/csv; charset=utf-8"),
     "intervals": ("区间还原 CSV", intervals_csv, "text/csv; charset=utf-8"),
     "quarantine": ("隔离区 CSV", quarantine_csv, "text/csv; charset=utf-8"),
     "readings": ("读数证据 CSV", readings_csv, "text/csv; charset=utf-8"),
+    "settlement": ("双向净结算 CSV", settlement_csv, "text/csv; charset=utf-8"),
     "manifest": ("运行清单 JSON", manifest_json, "application/json; charset=utf-8"),
 }
 
 
 def page_context(settings, store, batch) -> dict:
     if batch is None:
-        return {"files": [], "manifest_summary": [], "counts": {}}
+        return {"files": [], "manifest_summary": [], "counts": {},
+                "settlement_present": False}
     ident = batch["batch_id"]
     counts = store.count_rows(ident)
+    settlement_months = store.load_settlement_months(ident)
+    settlement_present = bool(settlement_months)
     files = [
         {"key": "monthly", "label": "月度分摊 CSV", "href": "/api/export/monthly.csv",
          "rows": counts["allocations"]},
@@ -76,9 +86,14 @@ def page_context(settings, store, batch) -> dict:
         {"key": "manifest", "label": "运行清单 JSON", "href": "/api/export/manifest.json",
          "rows": 1},
     ]
+    if settlement_present:
+        files.insert(4, {
+            "key": "settlement", "label": "双向净结算 CSV（含采用/暂挂）",
+            "href": "/api/export/settlement.csv", "rows": len(settlement_months)})
     return {
         "files": files,
         "manifest_summary": manifest_out.summary(
             manifest_out.build(store, batch, store.load_manifest(ident))),
         "counts": counts,
+        "settlement_present": settlement_present,
     }

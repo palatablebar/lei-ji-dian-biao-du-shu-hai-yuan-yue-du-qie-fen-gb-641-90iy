@@ -48,6 +48,13 @@ def export_manifest(batch_id: str | None = None,
     return _response(body, filename, "application/json; charset=utf-8")
 
 
+@router.get("/api/export/settlement.csv")
+def export_settlement(batch_id: str | None = None,
+                      ctx: Ctx = Depends(get_ctx)) -> Response:
+    body, filename = service.settlement_csv(ctx.settings, ctx.store, batch_id)
+    return _response(body, filename, "text/csv; charset=utf-8")
+
+
 @router.get("/export")
 def page_export(request: Request, batch_id: str | None = None,
                 ctx: Ctx = Depends(get_ctx)):

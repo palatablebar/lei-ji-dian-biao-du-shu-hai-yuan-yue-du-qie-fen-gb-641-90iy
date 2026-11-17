@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="page-head">
+  <div>
+    <h1 class="page-title">双向读数台账</h1>
+    <p class="page-meta mono">
+      {% if batch %}{{ batch.batch_id }} · {{ batch.sample }}{% else %}未运行{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-ghost" href="/settlement">返回结算</a>
+    <a class="btn btn-ghost" href="/api/settlement/readings">台账接口</a>
+  </div>
+</section>
+
+<div class="notice" id="notice" role="status" hidden></div>
+
+{% if not readings %}
+<section class="empty"><p class="empty-line">没有双向表读数台账，先跑一次含光伏表的批次。</p></section>
+{% else %}
+<section class="kpis" aria-label="台账对账">
+  <div class="kpi"><span class="kpi-label">输入行</span><span class="kpi-value mono">{{ checks.input_rows }}</span></div>
+  <div class="kpi"><span class="kpi-label">采用</span><span class="kpi-value mono">{{ checks.adopted }}</span></div>
+  <div class="kpi"><span class="kpi-label">重复</span><span class="kpi-value mono">{{ checks.duplicate }}</span></div>
+  <div class="kpi"><span class="kpi-label">冲突</span><span class="kpi-value mono">{{ checks.conflict }}</span></div>
+  <div class="kpi"><span class="kpi-label">隔离</span><span class="kpi-value mono">{{ checks.quarantine }}</span></div>
+  <div class="kpi"><span class="kpi-label">分区</span><span class="kpi-value mono">{{ '平衡' if checks.balanced else '不平' }}</span></div>
+</section>
+
+{% if supplements %}
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">合并的抄表包</h2>
+    <span class="panel-sub mono">{{ supplements|length }} 个</span>
+  </div>
+  <table class="table table-dense">
+    <thead><tr><th>样例</th><th>编码</th><th class="num">数据行</th><th>sha256</th></tr></thead>
+    <tbody>
+      {% for item in supplements %}
+      <tr>
+        <td class="mono">{{ item.sample }}</td>
+        <td class="mono">{{ item.encoding }}</td>
+        <td class="num mono">{{ item.rows }}</td>
+        <td class="mono cell-raw" title="{{ item.sha256 }}">{{ item.sha256[:16] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if conflicts %}
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">冲突 / 倒走</h2>
+    <span class="badge badge-bad">{{ conflicts|length }} 条</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table table-dense" data-sortable>
+      <thead><tr><th data-key="meter_id">表号</th><th>方向</th><th data-key="read_at">抄表时间</th>
+        <th data-key="source">来源</th><th data-key="lineno">行号</th><th class="num">读数</th><th>原因码</th><th>说明</th></tr></thead>
+      <tbody>
+        {% for row in conflicts %}
+        <tr>
+          <td class="mono">{{ row.meter_id }}</td>
+          <td>{{ row.direction }}</td>
+          <td class="mono">{{ row.read_at|localdt }}</td>
+          <td class="mono">{{ row.source }}</td>
+          <td class="mono">{{ row.lineno }}</td>
+          <td class="num mono">{{ row.reading_text }}</td>
+          <td class="mono">{{ row.code }} · {{ row.reason }}</td>
+          <td class="cell-note">{{ row.detail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">两向原始读数</h2>
+    <span class="panel-sub mono">{{ readings|length }} 行</span>
+  </div>
+  <div class="chips">
+    {% for item in by_direction %}<span class="chip">{{ item.direction }} <b class="mono">{{ item.count }}</b></span>{% endfor %}
+  </div>
+  <div class="table-wrap">
+    <table class="table table-dense" data-sortable>
+      <thead><tr><th data-key="source">来源</th><th data-key="sample">样例</th><th data-key="lineno">行号</th>
+        <th data-key="meter_id">表号</th><th data-key="direction">方向</th><th data-key="read_at">抄表时间</th>
+        <th data-key="reading" class="num">读数</th><th>原始值</th><th data-key="status">状态</th><th>原因码</th><th>备注</th></tr></thead>
+      <tbody>
+        {% for row in readings %}
+        <tr class="{{ 'row-held' if row.status == 'quarantine' else '' }}">
+          <td class="mono">{{ row.source }}</td>
+          <td class="mono">{{ row.sample }}</td>
+          <td class="mono">{{ row.lineno }}</td>
+          <td class="mono">{{ row.meter_id }}</td>
+          <td>{{ row.direction }}</td>
+          <td class="mono">{{ row.read_at|localdt }}</td>
+          <td class="num mono">{{ row.reading }}</td>
+          <td class="num mono">{{ row.reading_text }}</td>
+          <td><span class="badge badge-{{ 'bad' if row.status == 'quarantine' else ('warn' if row.status in ('duplicate', 'conflict') else 'ok') }}">{{ row.status }}</span></td>
+          <td class="mono">{{ row.code }}</td>
+          <td class="cell-note">{{ row.note or row.detail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script src="/static/app.js" type="module"></script>
+<script src="/static/table.js" type="module"></script>
+{% endblock %}
